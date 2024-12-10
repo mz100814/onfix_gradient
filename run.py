@@ -1,4 +1,3 @@
-
 global active_accounts  # inserted
 import asyncio
 import random
@@ -8,7 +7,6 @@ from asyncio import Lock
 from loguru import logger
 from loader import config, semaphore
 from core.bot import Bot
-from core.auth import ClientAuth
 from models import Account
 from utils import export_results, setup, export_statistics
 from console import Console
@@ -54,10 +52,8 @@ async def process_export_statistics(account: Account) -> dict:
         await bot.close_session()
         return user_info
 
-async def cleanup(auth_client: ClientAuth):
-    await auth_client.deactivate_session()
 
-async def run(auth_client):
+async def run():
     try:
         while True:
             Console().build()
@@ -92,31 +88,25 @@ async def run(auth_client):
         logger.debug(f'An error occurred: {err}')
     finally:  # inserted
         pass  # postinserted
-    await cleanup(auth_client)
 
 async def main():
-    auth_client = ClientAuth()
-    status = await auth_client.run()
-    if not status:
-        await auth_client.deactivate_session()
-        return
-    else:  # inserted
-        try:
-            await run(auth_client)
-        except asyncio.CancelledError:
-            logger.info('Main task was cancelled')
-        except Exception as e:
-            logger.error(f'An error occurred: {e}')
-        finally:
-            await cleanup(auth_client)
+    try:
+        await run()
+    except asyncio.CancelledError:
+        logger.info('Main task was cancelled')
+    except Exception as e:
+        logger.error(f'An error occurred: {e}')
+
 
 def handle_interrupt(signum, frame):
     logger.info('Received interrupt signal. Cancelling tasks...')
-    for task in asyncio.all_tasks(loop=asyncio.get_event_loop()):
-        try:
-            task.cancel()
-        except asyncio.CancelledError:
-            continue
+    loop = asyncio.get_event_loop()
+    for task in asyncio.all_tasks(loop=loop):
+        task.cancel()
+    loop.stop()  # 停止事件循环
+    sys.exit(0)  # 退出程序
+
+
 if __name__ == '__main__':
     if sys.platform == 'win32':
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())

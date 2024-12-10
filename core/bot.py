@@ -1,4 +1,5 @@
 
+import json
 from loader import captcha_solver, config
 from models import Account
 from utils import *
@@ -24,8 +25,8 @@ class Bot(NodePayAPI):
 
     async def process_registration(self) -> bool:
         try:
-            if not await check_if_email_valid(self.account_data.imap_server, self.account_data.email, self.account_data.password):
-                return False
+            # if not await check_if_email_valid(self.account_data.imap_server, self.account_data.email, self.account_data.password):
+            #     return False
             logger.info(f'Account: {self.account_data.email} | Registering...')
             tokens = await self.sign_up()
             await self.lookup_sign_up(tokens['idToken'])
@@ -35,12 +36,20 @@ class Bot(NodePayAPI):
             if not response or response.get('code', 0)!= 200:
                 logger.error(f'Account: {self.account_data.email} | Failed to send email verification: {response}')
                 return False
-        else:  
-            logger.info(f'Account: {self.account_data.email} | Email verification sent')
-            code = await check_email_for_code(self.account_data.imap_server, self.account_data.email, self.account_data.password)
-            if code is None:
-                logger.error(f'Account: {self.account_data.email} | Failed to get email verification code')
-                return False
+            else:  
+                logger.info(f'Account: {self.account_data.email} | Email verification sent')
+                code = await check_email_for_code(self.account_data.imap_server, self.account_data.email, self.account_data.password)
+                if code is None:
+                    logger.error(f'Account: {self.account_data.email} | Failed to get email verification code')
+                    return False
+                else:  # inserted
+                    await self.verify_email(code)
+                    logger.success(f'Account: {self.account_data.email} | Email verified')
+                    tokens = await self.get_access_token(tokens['refreshToken'])
+                    self.session.headers['authorization'] = f"Bearer {tokens['access_token']}"
+                    await self.bind_invite_code(config.invite_code)
+                    logger.success(f'Account: {self.account_data.email} | Registered successfully')
+                    return True
         except APIError as error:
             if error.error_message and error.error_message.strip() == 'EMAIL_EXISTS':
                 logger.warning(f'Account: {self.account_data.email} | Email already registered')
@@ -49,14 +58,7 @@ class Bot(NodePayAPI):
         except Exception as error:
             logger.error(f'Account: {self.account_data.email} | Failed to register: {error}')
         return False
-        else:  # inserted
-            await self.verify_email(code)
-            logger.success(f'Account: {self.account_data.email} | Email verified')
-            tokens = await self.get_access_token(tokens['refreshToken'])
-            self.session.headers['authorization'] = f"Bearer {tokens['access_token']}"
-            await self.bind_invite_code(config.invite_code)
-            logger.success(f'Account: {self.account_data.email} | Registered successfully')
-            return True
+        
 
     async def process_farming(self):
         try:
@@ -75,14 +77,23 @@ class Bot(NodePayAPI):
         return await client.connect(client_id=node_credentials['clientid'], username=node_credentials['username'], password=node_credentials['password'])
 
     async def verify_node(self, client_id: str):
-        pass
-        try:
-            pass  # postinserted
-        logger.error(f'Account: {self.account_data.email} | Node banned, stopping...')
-        return
-        except Exception as error:
-            logger.error(f'Account: {self.account_data.email} | Failed to verify node: {error}')
-        await asyncio.sleep(1800)
+        await asyncio.sleep(60)
+        while True:
+            try:
+                # 这里有一个接口，可以查询节点状态
+                response = await self.send_request(request_type='GET', method=f'/sentrynode/get/{client_id}')
+                logger.debug(f'node health ckeck:>>>>>>>>>>>{response}')
+                if type(response) == str:
+                    response = json.loads(response)
+                if response.get('code') == 200:
+                    if response.get('data', {}).get('banned') == True:
+                        logger.error(f'Account: {self.account_data.email} | Node banned')
+                        return
+            except Exception as error:
+                logger.error(f'Account: {self.account_data.email} | Failed to verify node: {error}')
+                return
+            # 每30分钟检查一次
+            await asyncio.sleep(60*30)
 
     async def process_login(self) -> bool:
         try:
@@ -108,28 +119,19 @@ class Bot(NodePayAPI):
 
     async def perform_farming_actions(self):
         if not await self.process_login():
+            logger.error(f'Account: {self.account_data.email} | Failed to login')
             return
         node_credentials = await self.register_node()
+        if type(node_credentials) == str:
+            node_credentials = json.loads(node_credentials)
         logger.info(f"Account: {self.account_data.email} | Node registered with ID: {node_credentials['clientid']}")
-        websocket_task = asyncio.create_task(self.run_websocket_client(node_credentials))
-        await asyncio.sleep(30)
-        verify_task = asyncio.create_task(self.verify_node(node_credentials['clientid']))
         while True:
-            if websocket_task.done() or websocket_task.cancelled():
-                if not verify_task.cancelled():
-                    verify_task.cancel()
-                if not websocket_task.cancelled():
-                    websocket_task.cancel()
-                logger.info(f'Account: {self.account_data.email} | Retry farming in 10m')
-                await asyncio.sleep(600)
-                self.session = self.setup_session()
-                return await self.perform_farming_actions()
-            else:  # inserted
-                if verify_task.done() or verify_task.cancelled():
-                    logger.info(f'Account: {self.account_data.email} | Stopped farming')
-                    if not websocket_task.cancelled():
-                        websocket_task.cancel()
-                    if not verify_task.cancelled():
-                        verify_task.cancel()
-                    return None
-                await asyncio.sleep(3)
+            websocket_task = asyncio.create_task(self.run_websocket_client(node_credentials))
+            await asyncio.sleep(30)
+            verify_task = asyncio.create_task(self.verify_node(node_credentials['clientid']))
+            while True:
+                if websocket_task.done() or verify_task.done():
+                    break
+                else:
+                    await asyncio.sleep(3)
+                

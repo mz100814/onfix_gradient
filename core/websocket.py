@@ -67,16 +67,21 @@ class WebSocketClient:
         self.retry_attempts = 0
 
     async def messages_loop(self, websocket: ClientWebSocketResponse, generator: MQTTMessageGenerator) -> None:
-        if False:
+        loop_time = 0
+        while loop_time < 5:
+            logger.debug(f'Account: {self.account_data.email} | Sending ping message----')
             await websocket.send_bytes(generator.generate_ping_message())
             await self.handle_and_receive_message(websocket)
-            await asyncio.sleep(1)
+            await asyncio.sleep(10)
+            loop_time += 1
 
     async def handle_and_receive_message(self, websocket: ClientWebSocketResponse) -> None:
         try:
             msg = await websocket.receive()
             if isinstance(msg, WSMessage):
                 if msg.type == WSMsgType.BINARY:
+                    # data=b'@\x04\x97Y\x00\x00' 需要转成字符串
+                    logger.info(f'Account: {self.account_data.email} | Received binary message: {msg.data.decode("ISO-8859-1")}')
                     return
                 if msg.type == WSMsgType.TEXT:
                     logger.info(f'Account: {self.account_data.email} | Received text message: {msg.data}')

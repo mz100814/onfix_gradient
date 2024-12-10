@@ -128,6 +128,8 @@ class NodePayAPI:
     async def sign_in(self) -> dict[str, Any]:
         json_data = {'returnSecureToken': True, 'email': self.account_data.email, 'password': self.account_data.password, 'clientType': 'CLIENT_TYPE_WEB'}
         response = await self.send_request(url='https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword', json_data=json_data, params={'key': self.GLOBAL_KEY})
+        #将response 字符串，转为dict
+        response = json.loads(response)
         if response.get('idToken'):
             self.session.headers['authorization'] = f"Bearer {response['idToken']}"
             return response
